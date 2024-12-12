@@ -1,0 +1,4 @@
+[submodule "Data/TagLayouts/Halo2"]
+	path = Data/TagLayouts/Halo2
+	url = git@github.com:num0005/Halo2TagLayouts.git
+	branch = main

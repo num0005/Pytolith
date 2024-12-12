@@ -1,0 +1,2 @@
+include Data/TagLayouts/Halo2/*.xml
+include Data/TagLayouts/Halo2/common/*.xml
