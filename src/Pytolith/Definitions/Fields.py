@@ -24,6 +24,9 @@ class TagOptions:
 	c_style_name: str
 	pascal_style_name: str
  
+	source_xml_file: str
+	"""What XML was this Options object defined in?"""
+ 
 	entries: tuple[FieldNameInfo] = _field(default_factory=tuple)
 
 @_dataclass(frozen=True, slots=True)

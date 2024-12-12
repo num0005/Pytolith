@@ -233,6 +233,9 @@ class LayoutDef:
 
  		(default value for tag blocks is 'tbfd', which might stand for "tag block field data")
   	"""
+
+	source_xml_file: str = ""
+	"""What XML was this Layout defined in?"""
    
 	@property
 	def tag_block_field_header_tag(self):
@@ -250,3 +253,5 @@ class TagGroup:
 	parent: str|None
 	version: int
 	layout: LayoutDef
+	source_xml_file: str
+	"""What XML was this Tag Group defined in?"""

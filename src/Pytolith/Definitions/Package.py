@@ -29,8 +29,10 @@ class Definitions:
 		return self._is_loaded
 
 	def load_from_xml(self, folder: str):
-		assert not self._is_loaded
+		assert not self._is_loaded, "Defintions are already loaded!"
 		self._id_to_element: dict[str, _ET.Element] = dict()
+		self._id_to_source_xml: dict[str, str] = dict()
+		self._xml_load_path = folder
 
 		# stage 0: load the xml for all files + parse it to get all tag layouts
 		# and top level tag groups
@@ -43,20 +45,21 @@ class Definitions:
 			if is_xml_file(path):
 				self._load_file(_os.path.join(folder, "common", file))
 
-		files_with_groups: list[_ET.Element] = []
+		files_with_groups: list[tuple[str, _ET.Element]] = []
 		for file in _os.listdir(folder):
 			path = _os.path.join(folder, file)
 			if not is_xml_file(path):
 				continue
-			files_with_groups.append(self._load_file(path))
+			relative_path = _os.path.relpath(path, folder)
+			files_with_groups.append((relative_path, self._load_file(path)))
 
 		# stage 1: parse all layouts including references
 		for id, layout_element in self._id_to_element.items():
 			self._parse_layout_from_xml(id, layout_element)
 
 		# stage 2: resolve tag groups
-		for group_element in files_with_groups:
-			tag_group = self._parse_group_from_xml(group_element)
+		for filename, group_element in files_with_groups:
+			tag_group = self._parse_group_from_xml(group_element, filename)
 			self.TagGroups[tag_group.group] = tag_group
    
 		# stage 3: merge parents
@@ -71,6 +74,7 @@ class Definitions:
 
 		
 		del self._id_to_element
+		del self._id_to_source_xml
 
 		self._is_loaded = True
   
@@ -119,6 +123,7 @@ class Definitions:
 	
 	def _load_file(self, filename: str) -> _ET.Element:
 		document = _ET.parse(filename)
+		relative_path = _os.path.relpath(filename, self._xml_load_path)
 		# note and extract all the layouts in the file
 		for layout in document.iter("Layout"):
 			id = layout.attrib["regolithID"]
@@ -126,6 +131,7 @@ class Definitions:
 				raise RuntimeError(f"Duplicate layout declaration for {id}, please fix this in tag defs!")
 
 			self._id_to_element[id] = layout
+			self._id_to_source_xml[id] = relative_path
 		# we can actually parse the enum defintions already
 		for option in document.iter("Options"):
 			id = option.attrib["regolithID"]
@@ -138,12 +144,15 @@ class Definitions:
 				
 				raise RuntimeError(f"Duplicate options declaration for {id}! Please fix this in tag defintions!")
 
-			self._id_to_options[id] = _Fields.TagOptions(id, c_style_name=c_style_name, pascal_style_name=pascal_case_name, entries=entries)
-
+			self._id_to_options[id] = _Fields.TagOptions(id, 
+                                                c_style_name=c_style_name, 
+                                                pascal_style_name=pascal_case_name, 
+                                                entries=entries,
+                                                source_xml_file=relative_path)
 		
 		return document.getroot()
 	
-	def _parse_group_from_xml(self, element: _ET.Element):
+	def _parse_group_from_xml(self, element: _ET.Element, source_file: str):
 		assert element.tag == "TagGroup"
 
 		group = element.attrib["group"]
@@ -153,7 +162,7 @@ class Definitions:
 
 		definition = self._get_layout_for_element("tag group", element)
 		
-		return _Layout.TagGroup(group, name, parent, version, definition)
+		return _Layout.TagGroup(group, name, parent, version, definition, source_file)
 	
 	def _get_layout_by_id(self, id: str):
 		return self._parse_layout_from_xml(id, self._id_to_element[id])
@@ -169,12 +178,14 @@ class Definitions:
 		display_name = element.attrib.get("name")
 		structure_tag = element.attrib.get("tag")
 		is_structure = structure_tag is not None
+  
+		source_xml_file = self._id_to_source_xml[id]
 
 		# we need to make sure to create the layout now
 		# and add it to the internal map now before parsing the fields
 		# so we can parse circular references in one shot instead of two
 
-		layout = _Layout.LayoutDef(id, internal_name, display_name, is_structure, structure_tag)
+		layout = _Layout.LayoutDef(id, internal_name, display_name, is_structure, structure_tag, source_xml_file)
 		self._id_to_layout[id] = layout
 		versions: list[_Layout.FieldSetDef] = []
 
