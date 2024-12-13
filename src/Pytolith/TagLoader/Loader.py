@@ -1,3 +1,5 @@
+from __future__ import annotations as _
+from dataclasses import dataclass as _dataclass
 from enum import Enum as _Enum
 import struct as _struct
 import typing as _typing
@@ -43,6 +45,150 @@ class _ByteStream:
 	def length_left(self):
 		return self.length - self.offset
 
+@_dataclass(slots=True, frozen=True)
+class _TagReaderCache:
+	# layout types
+	s_ulong: _struct.Struct
+	s_tag_reference: _struct.Struct
+	s_tag_block: _struct.Struct
+	# basic readers that don't need the field definition
+	read_cc4: _typing.Callable[[_ByteStream], str]
+	read_real: _typing.Callable[[_ByteStream], float]
+	read_char_integer: _typing.Callable[[_ByteStream], int]
+	read_short_integer: _typing.Callable[[_ByteStream], int]
+	read_long_integer: _typing.Callable[[_ByteStream], int]
+	read_uchar_integer: _typing.Callable[[_ByteStream], int]
+	read_ushort_integer: _typing.Callable[[_ByteStream], int]
+	read_ulong_integer: _typing.Callable[[_ByteStream], int]
+	read_two_shorts: _typing.Callable[[_ByteStream], tuple[int, int]]
+	read_two_reals: _typing.Callable[[_ByteStream], tuple[float, float]]
+	read_three_reals: _typing.Callable[[_ByteStream], tuple[float, float, float]]
+	read_four_reals: _typing.Callable[[_ByteStream],  tuple[float, float, float, float]]
+	read_rect: _typing.Callable[[_ByteStream], _Rectangle2D]
+	read_point2d: _typing.Callable[[_ByteStream], _Point2D]
+	# more complex readers that need the field definition
+	read_pad_field: _typing.Callable[[_ByteStream, FIELD_TYPE], bytes]
+ 
+ 
+	cache: _typing.ClassVar[dict[bool, _TagReaderCache]] = dict()
+ 
+	@staticmethod
+	def get(endianness: str, is_big_endian: bool):
+		try:
+			return _TagReaderCache.cache[is_big_endian]
+		except:
+			cache =_TagReaderCache.cache[is_big_endian] = _TagReaderCache._generate_cache(endianness, is_big_endian)
+			_TagReaderCache.cache[is_big_endian] = cache
+			return cache
+ 
+	@staticmethod
+	def _generate_cache(endianness: str, is_big_endian: bool):
+		# primitve type structures
+		s_real = _struct.Struct(endianness + "f")
+		s_long = _struct.Struct(endianness + "l")
+		s_ulong = _struct.Struct(endianness + "L")
+		s_short = _struct.Struct(endianness + "h")
+		s_ushort = _struct.Struct(endianness + "H")
+		s_char = _struct.Struct(endianness + "b")
+		s_uchar = _struct.Struct(endianness + "B")
+		# tag types
+		s_2short = _struct.Struct(endianness + "hh")
+		s_rect2d = _struct.Struct(endianness + "hhhh")
+		s_2real = _struct.Struct(endianness + "ff")
+		s_3real = _struct.Struct(endianness + "fff")
+		s_4real = _struct.Struct(endianness + "ffff")
+		# complex tag types
+  
+		# tag reference (editor) layout:
+		# tag: cc4, tag type
+		# path_pointer: u4, is invalid/garbage on disk
+		# path_length: u4
+		# tag_index: u4, is invalid/garbage on disk
+		s_tag_reference = _struct.Struct(endianness + "4xL4x")
+		# tag block (editor) layout:
+		# count: u4
+		# elements: void* # invalid/garbage on disk
+		# defintion: void* # invalid/garbage on disk
+		s_tag_block = _struct.Struct(endianness + "LLL")
+  
+		#######
+		# Field-less readers
+		#
+		# These readers do not take the tag field definition as an argument
+		#######
+  
+		if is_big_endian:
+			def read_cc4(es: _ByteStream):
+				return es.read_string(4)
+		else:
+			def read_cc4(es: _ByteStream) -> str:
+				string = es.read_string(4)
+				return string[::-1]
+		def read_real(es: _ByteStream) -> float:
+			return s_real.unpack(es.read(4))[0]
+		def read_char_integer(es: _ByteStream) -> int:
+			return s_char.unpack(es.read(1))[0]
+		def read_short_integer(es: _ByteStream) -> int:
+			return s_short.unpack(es.read(2))[0]
+		def read_long_integer(es: _ByteStream) -> int:
+			return s_long.unpack(es.read(4))[0]
+		def read_uchar_integer(es: _ByteStream) -> int:
+			return s_uchar.unpack(es.read(1))[0]
+		def read_ushort_integer(es: _ByteStream) -> int:
+			return s_ushort.unpack(es.read(2))[0]
+		def read_ulong_integer(es: _ByteStream) -> int:
+			return s_ulong.unpack(es.read(4))[0]
+		def read_two_shorts(es: _ByteStream) -> tuple[int, int]:
+			return s_2short.unpack(es.read(4))
+		def read_two_reals(es: _ByteStream) -> tuple[float, float]:
+			return s_2real.unpack(es.read(8))
+		def read_three_reals(es: _ByteStream) -> tuple[float, float]:
+			return s_3real.unpack(es.read(12))
+		def read_four_reals(es: _ByteStream) -> tuple[float, float]:
+			return s_4real.unpack(es.read(16))
+		def read_rect(es: _ByteStream):
+			temp = s_rect2d.unpack(es.read(8))
+			value = _Rectangle2D(*temp)
+			return value
+		def read_point2d(es: _ByteStream):
+			return _Point2D(*read_two_shorts(es))
+
+		#######
+		# Field-based readers
+		#
+		# These readers require the field definition to work
+		#######
+
+		def read_pad_field(es: _ByteStream, field_def: FIELD_TYPE):
+			if field_def.tag == 'pd64':
+				return None
+			try:
+				return bytes(es.read(field_def.length))
+			except:
+				return es.read(es.length_left())
+
+		return _TagReaderCache(
+					s_ulong = s_ulong,
+       				s_tag_reference=s_tag_reference,
+                         s_tag_block=s_tag_block,
+                         read_cc4=read_cc4,
+                         read_real=read_real,
+                         read_char_integer=read_char_integer,
+                         read_short_integer=read_short_integer,
+                         read_long_integer=read_long_integer,
+                         read_uchar_integer=read_uchar_integer,
+                         read_ushort_integer=read_ushort_integer,
+                         read_ulong_integer=read_ulong_integer,
+                         read_two_shorts=read_two_shorts,
+                         read_two_reals=read_two_reals,
+                         read_three_reals=read_three_reals,
+                         read_four_reals=read_four_reals,
+                         read_rect=read_rect,
+                         read_point2d=read_point2d,
+                         read_pad_field=read_pad_field)
+
+
+
 class _TagLoadingState:
 	__slots__ = ("_tag_group_mapping","_stream","_header","_group_def","_s_tbfd","fill_in_missing_fields",
               "_tag_readers", "_tag_readers_special_field")
@@ -73,7 +219,7 @@ class _TagLoadingState:
 		if self._group_def.version != self._header.version:
 			raise ValueError(f"Unsupported tag version set in header (got {self._header.version} expected {self._group_def.version})")
 
-		self._s_tbfd = _struct.Struct(self.endianess + "hhl" if self._header.old_fieldset_header else "lll")
+		self._s_tbfd = _struct.Struct(self.endianness + "hhl" if self._header.old_fieldset_header else "lll")
   
 	def read(self) -> _TagGroupData:
 		self.read_header()
@@ -149,38 +295,34 @@ class _TagLoadingState:
 		return _TagFieldElement(tuple(fields_data), 
                          field_set_def.auto_c_name_to_field_index,
                          field_set_def.auto_pascal_name_to_field_index)
-
-	ZERO_SIZE_FIELDS = ("Struct", "Explanation", "Custom")
  
 	def _setup_tag_readers(self):
-		endianness = self.endianess
+		endianness = self.endianness
+		readers = _TagReaderCache.get(endianness, self.is_big_endian)
 		# primitve type structures
-		s_real = _struct.Struct(endianness + "f")
-		s_long = _struct.Struct(endianness + "l")
-		s_ulong = _struct.Struct(endianness + "L")
-		s_short = _struct.Struct(endianness + "h")
-		s_ushort = _struct.Struct(endianness + "H")
-		s_char = _struct.Struct(endianness + "b")
-		s_uchar = _struct.Struct(endianness + "B")
-		# tag types
-		s_2short = _struct.Struct(endianness + "hh")
-		s_rect2d = _struct.Struct(endianness + "hhhh")
-		s_2real = _struct.Struct(endianness + "ff")
-		s_3real = _struct.Struct(endianness + "fff")
-		s_4real = _struct.Struct(endianness + "ffff")
-		# complex tag types
+		s_ulong = readers.s_ulong
   
 		# tag reference (editor) layout:
 		# tag: cc4, tag type
 		# path_pointer: u4, is invalid/garbage on disk
 		# path_length: u4
 		# tag_index: u4, is invalid/garbage on disk
-		s_tag_reference = _struct.Struct(endianness + "4xL4x")
+		s_tag_reference = readers.s_tag_reference
 		# tag block (editor) layout:
 		# count: u4
 		# elements: void* # invalid/garbage on disk
 		# defintion: void* # invalid/garbage on disk
-		s_tag_block = _struct.Struct(endianness + "LLL")
+		s_tag_block = readers.s_tag_block
+  
+		read_ulong_integer = readers.read_ulong_integer
+		read_cc4 = readers.read_cc4
+		read_real = readers.read_real
+		read_uchar_integer = readers.read_uchar_integer
+		read_ushort_integer = readers.read_ushort_integer
+		read_two_reals = readers.read_two_reals
+		read_three_reals = readers.read_three_reals
+		read_four_reals = readers.read_four_reals
+
 
 		def string_id_to_str(string_id):
 			# decode string ID (lenght + numberical ID)
@@ -190,40 +332,10 @@ class _TagLoadingState:
 			value = self._read_str(length)
 			return value
 		
-		def read_cc4(es: _ByteStream) -> str:
-			string = es.read_string(4)
-			if not self.is_big_endian:
-				string = string[::-1]
-			return string
-		def read_real(es: _ByteStream) -> float:
-			return s_real.unpack(es.read(4))[0]
-		def read_char_integer(es: _ByteStream) -> int:
-			return s_char.unpack(es.read(1))[0]
-		def read_short_integer(es: _ByteStream) -> int:
-			return s_short.unpack(es.read(2))[0]
-		def read_long_integer(es: _ByteStream) -> int:
-			return s_long.unpack(es.read(4))[0]
-		def read_uchar_integer(es: _ByteStream) -> int:
-			return s_uchar.unpack(es.read(1))[0]
-		def read_ushort_integer(es: _ByteStream) -> int:
-			return s_ushort.unpack(es.read(2))[0]
-		def read_ulong_integer(es: _ByteStream) -> int:
-			return s_ulong.unpack(es.read(4))[0]
-		def read_two_shorts(es: _ByteStream) -> tuple[int, int]:
-			return s_2short.unpack(es.read(4))
-		def read_two_reals(es: _ByteStream) -> tuple[float, float]:
-			return s_2real.unpack(es.read(8))
-		def read_three_reals(es: _ByteStream) -> tuple[float, float]:
-			return s_3real.unpack(es.read(12))
-		def read_four_reals(es: _ByteStream) -> tuple[float, float]:
-			return s_4real.unpack(es.read(16))
 		def read_string_id(es: _ByteStream) -> str:
 			string_id = read_ulong_integer(es)
 			return string_id_to_str(string_id)
-		def read_rect(es: _ByteStream):
-			temp = s_rect2d.unpack(es.read(8))
-			value = _Rectangle2D(*temp)
-			return value
+
 		def read_tag_reference(es: _ByteStream):
 			# read structure in element stream
 			tag_group = read_cc4(es)
@@ -261,9 +373,9 @@ class _TagLoadingState:
 		self._tag_readers = {
 			"String" : lambda es: es.read_string(0x20),
 			"LongString": lambda es: es.read_string(0x100),
-			"CharInteger": read_char_integer,
-			"ShortInteger": read_short_integer,
-			"LongInteger": read_long_integer,
+			"CharInteger": readers.read_char_integer,
+			"ShortInteger": readers.read_short_integer,
+			"LongInteger": readers.read_long_integer,
 			"Angle": read_real,
 			"Real": read_real,
 			"RealFraction": read_real,
@@ -282,8 +394,8 @@ class _TagLoadingState:
 			"LongFlags": read_ulong_integer,
 			"LongBlockFlags": read_ulong_integer,
 
-			"Point2D": lambda es: _Point2D(*read_two_shorts(es)),
-			"Rectangle2D": read_rect,
+			"Point2D": readers.read_point2d,
+			"Rectangle2D": readers.read_rect,
 			"RgbColor": read_ulong_integer,
 			"ArgbColor": read_ulong_integer,
 			"RealPoint2D": read_two_reals,
@@ -305,7 +417,7 @@ class _TagLoadingState:
 			"RealPlane2D": lambda es: _RealPlane2D(*read_three_reals(es)),
 			"RealPlane3D": lambda es: _RealPlane3D(*read_four_reals(es)),
 
-			"ShortBounds": read_two_shorts,
+			"ShortBounds": readers.read_two_shorts,
 
 			"TagReference": read_tag_reference,
 
@@ -344,14 +456,6 @@ class _TagLoadingState:
 				array_entries.append(tuple(self._parse_fields(es, array_def.entry_fields, is_array=True)))
 			return tuple(array_entries)
 
-		def read_pad_field(es: _ByteStream, field_def: FIELD_TYPE):
-			if field_def.tag == 'pd64':
-				return None
-			try:
-				return bytes(es.read(field_def.length))
-			except:
-				return es.read(es.length_left())
-
 		def read_struct_field(es: _ByteStream, field_def: FIELD_TYPE):
 			struct_layout, s_count = self._read_field_set_header(field_def.layout, self.FieldSetTypes.TagStructFieldData)
 			if s_count != 1 and s_count is not None:
@@ -364,6 +468,8 @@ class _TagLoadingState:
 			assert struct_stream.length_left() == 0, "Data left over after reading struct!"
    
 			return value
+
+		read_pad_field = readers.read_pad_field
 	
 		self._tag_readers_special_field = {
 			"Block": read_block_field,
@@ -434,7 +540,7 @@ class _TagLoadingState:
 		return data.decode(errors="surrogateescape")
   
 	@property
-	def endianess(self):
+	def endianness(self):
 		return ">" if self._header.is_big_endian else "<"
 	
 	@property
