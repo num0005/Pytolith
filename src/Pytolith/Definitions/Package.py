@@ -17,10 +17,12 @@ import zlib as _zlib
 class Definitions:
 	def __init__(self):
 		self.TagGroups: dict[str, _Layout.TagGroup] = dict()
+		self.id_to_layout: dict[str, _Layout.LayoutDef] = dict()
+		self.version_hash = None
 
 		self._is_loaded = False
-		self._id_to_layout: dict[str, _Layout.LayoutDef] = dict()
 		self._id_to_options: dict[str, _Fields.TagOptions] = dict()
+		self._xml_load_path = None
   
   
 	@property
@@ -67,7 +69,7 @@ class Definitions:
 			if group.parent:
 				self._merge_fields_with_parent(group)
 		# stage 3b: explictly set the other layouts to not have merged fields
-		for layout in self._id_to_layout.values():
+		for layout in self.id_to_layout.values():
 			for field_set in layout.versions:
 				if not field_set._loader_merge_fields_set():
 					field_set._loader_set_merged_fields(False)
@@ -84,14 +86,24 @@ class Definitions:
   
 		pickled_string = _pickle.dumps(self)
 		pickled_string = pickletools.optimize(pickled_string)
-		return _zlib.compress(pickled_string, level=9)
+		zlib_package = _zlib.compress(pickled_string, level=9)
+		# calculate a hash of the data, this is not currently verified on load
+		# but is only used as a version string
+		import hashlib
+		hash = hashlib.sha256(zlib_package, usedforsecurity=False).digest()
+		assert len(hash) == 32
+		return hash + zlib_package
 
 	@staticmethod
-	def loads(compressed: '_abc.Buffer'):
+	def loads(packed_definitions: '_abc.Buffer'):
 		"""Loads definitions dumped using `definitions.dump()`"""
-		pickled = _zlib.decompress(compressed)
+		# split out the hash/version
+		view = memoryview(packed_definitions)
+		hash = view[:32]
+		pickled = _zlib.decompress(view[32:])
 		data = _pickle.loads(pickled)
 		assert type(data) == Definitions
+		data.version_hash = bytes(hash)
 		return data
 	
 	@staticmethod
@@ -171,8 +183,8 @@ class Definitions:
 		assert element.tag == "Layout"
 		assert element.attrib["regolithID"] == id
 
-		if id in self._id_to_layout.keys():
-			return self._id_to_layout[id]
+		if id in self.id_to_layout.keys():
+			return self.id_to_layout[id]
 
 		internal_name: str = element.attrib["internalName"]
 		display_name = element.attrib.get("name")
@@ -186,7 +198,7 @@ class Definitions:
 		# so we can parse circular references in one shot instead of two
 
 		layout = _Layout.LayoutDef(id, internal_name, display_name, is_structure, structure_tag, source_xml_file)
-		self._id_to_layout[id] = layout
+		self.id_to_layout[id] = layout
 		versions: list[_Layout.FieldSetDef] = []
 
 		# parse all the field-set versions

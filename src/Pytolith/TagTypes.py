@@ -1,6 +1,7 @@
 from __future__ import annotations as _
 
 from dataclasses import dataclass as _dataclass
+from typing import Callable as _Callable
 import Pytolith.Definitions as _Defs
 
 @_dataclass(slots=True)
@@ -72,6 +73,7 @@ class TagLayoutConfig:
 	definition: _Defs.LayoutDef
 	version: int
 	element_size: int
+	_fast_loader: _Callable
 	fieldset_defintion: _Defs.FieldSetDef = None
 	is_version_valid: bool = False
  

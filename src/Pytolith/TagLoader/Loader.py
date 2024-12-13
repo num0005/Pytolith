@@ -12,7 +12,19 @@ from Pytolith.TagTypes import TagBlock as _TagBlock, TagStruct as _TagStruct, Ta
 from Pytolith.TagLoader.Header import Header as _Header
 import io as _io
 import collections.abc as _abc
+import platform
 
+def __load_fast_definitions():
+	if platform.python_implementation() == "PyPy":
+		return None, None
+	try:
+		from Pytolith.TagLoader._FastTagLoaders import LAYOUT_READERS, LAYOUT_VERSION
+		return LAYOUT_READERS,LAYOUT_VERSION
+	except:
+          return None,None
+
+
+_FAST_LAYOUT_READERS,_FAST_READERS_VERSION = __load_fast_definitions()
 
 class _ByteStream:
 	class EOF(ValueError):
@@ -47,8 +59,19 @@ class _ByteStream:
 
 @_dataclass(slots=True, frozen=True)
 class _TagReaderCache:
-	# layout types
+     # basic types (used by fast loaders)
+	s_real: _struct.Struct
+	s_long: _struct.Struct
 	s_ulong: _struct.Struct
+	s_short: _struct.Struct
+	s_ushort: _struct.Struct
+	s_char: _struct.Struct
+	s_uchar: _struct.Struct
+	s_2short: _struct.Struct
+	s_2real: _struct.Struct
+	s_3real: _struct.Struct
+	s_4real: _struct.Struct
+     # layout types
 	s_tag_reference: _struct.Struct
 	s_tag_block: _struct.Struct
 	# basic readers that don't need the field definition
@@ -168,7 +191,17 @@ class _TagReaderCache:
 				return es.read(es.length_left())
 
 		return _TagReaderCache(
+					s_real = s_real,
+					s_long = s_long,
 					s_ulong = s_ulong,
+					s_short = s_short,
+					s_ushort = s_ushort,
+					s_char = s_char,
+					s_uchar = s_uchar,
+					s_2short = s_2short,
+					s_2real = s_2real,
+					s_3real = s_3real,
+					s_4real = s_4real,
        				s_tag_reference=s_tag_reference,
                          s_tag_block=s_tag_block,
                          read_cc4=read_cc4,
@@ -191,6 +224,8 @@ class _TagReaderCache:
 
 class _TagLoadingState:
 	__slots__ = ("_tag_group_mapping","_stream","_header","_group_def","_s_tbfd","fill_in_missing_fields",
+              "s_real", "s_long", "s_ulong", "s_short", "s_ushort", "s_char",
+              "s_uchar", "s_2short", "s_2real", "s_3real", "s_4real",
               "_tag_readers", "_tag_readers_special_field")
   
 	class FieldSetTypes(str,_Enum):
@@ -278,7 +313,14 @@ class _TagLoadingState:
 		# workaround to load older versions of vertex_shader, keep the version set here in sync with the tag definitions
 		if layout.unique_id == "block:vertex_shader" and version == 0 and element_size == 20:
 			version = 1
-		versioned_layout = _TagLayoutConfig(layout, version, element_size)
+   
+		fast_loader = None
+		try:
+			fast_loader = _FAST_LAYOUT_READERS[layout.unique_id][version]
+		except:
+			pass
+			
+		versioned_layout = _TagLayoutConfig(layout, version, element_size, fast_loader)
 		if not versioned_layout.is_version_valid:
 			raise ValueError(f"Version {version} is not supported for layout {layout.unique_id}")
 
@@ -290,7 +332,19 @@ class _TagLoadingState:
 
 	def _parse_field_data_element(self, element_stream: _ByteStream, layout: _TagLayoutConfig):
 		field_set_def = layout.fieldset_defintion
-		fields_data = self._parse_fields(element_stream, field_set_def.merged_fields, is_array=False)
+		fast_loader = layout._fast_loader
+		if fast_loader:
+			fields_data = []
+			try:
+				fast_loader(self, element_stream, field_set_def.merged_fields, fields_data)
+			except _ByteStream.EOF as eof:
+				# check if the stream ended at a field boundry
+				# if it did this could be a valid truncated tag created by implicit versioning (append)
+				# if not we either read the tag wrong or it's most likely corrupt
+				if element_stream.length_left() != 0:
+					raise ValueError(f"Unexpected end of tag data in the middle of a layout of type \"{layout.definition.unique_id}\"!")  from eof
+		else:
+			fields_data = self._parse_fields(element_stream, field_set_def.merged_fields, is_array=False)
 		layout.add_missing_fields(fields_data)
 		return _TagFieldElement(tuple(fields_data), 
                          field_set_def.auto_c_name_to_field_index,
@@ -300,7 +354,18 @@ class _TagLoadingState:
 		endianness = self.endianness
 		readers = _TagReaderCache.get(endianness, self.is_big_endian)
 		# primitve type structures
+		self.s_real = readers.s_real
+		self.s_long = readers.s_long
 		s_ulong = readers.s_ulong
+		self.s_ulong = s_ulong
+		self.s_short = readers.s_short
+		self.s_ushort = readers.s_ushort
+		self.s_char = readers.s_char
+		self.s_uchar = readers.s_uchar
+		self.s_2short = readers.s_2short
+		self.s_2real = readers.s_2real
+		self.s_3real = readers.s_3real
+		self.s_4real = readers.s_4real
   
 		# tag reference (editor) layout:
 		# tag: cc4, tag type

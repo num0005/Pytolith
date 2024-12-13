@@ -7,3 +7,4 @@ profile_run?
 __pycache__
 *.egg-info
 build/*
+_FastTagLoaders.[c|p]*
