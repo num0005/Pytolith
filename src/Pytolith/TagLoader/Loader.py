@@ -13,6 +13,8 @@ import collections.abc as _abc
 
 
 class _ByteStream:
+	class EOF(ValueError):
+		pass
 	__slots__ = ("array", "offset", "length")
 	def __init__(self, array: '_abc.Buffer'):
 		self.array = memoryview(array).toreadonly()
@@ -25,14 +27,14 @@ class _ByteStream:
   
 	def read(self, size: int):
 		if self.offset + size > self.length:
-			raise ValueError(f"Not enough space in stream to read {size} bytes ({size}>{len(self.array)-self.offset})!")
+			raise _ByteStream.EOF(f"Not enough space in stream to read {size} bytes ({size}>{len(self.array)-self.offset})!")
 		return_data = self.array[self.offset : self.offset+size]
 		self.offset += size
 		return return_data
 
 	def skip(self, size):
 		if self.offset + size > self.length:
-			raise ValueError("Reached end of stream while trying to skip forward!")
+			raise _ByteStream.EOF("Reached end of stream while trying to skip forward!")
 		self.offset += size
 
 	def read_string(self, length):
@@ -225,7 +227,14 @@ class _TagLoadingState:
 		def read_tag_reference(es: _ByteStream):
 			# read structure in element stream
 			tag_group = read_cc4(es)
-			path_length, = s_tag_reference.unpack(es.read(12))
+			try:
+				path_length, = s_tag_reference.unpack(es.read(12))
+			except _ByteStream.EOF as eof:
+				# rethrow it so that the caller knows something went wrong
+				# this is required as es.length_left() could be equal to zero at this point
+				# which would indicate an early (but valid!) end to the stream
+				# but we are actually in the middle of reading a field
+				raise ValueError("Unexpected end of stream while reading tag reference! Original error:" +  str(eof))
 			
 			tag_path = self._read_str(path_length, null_terminated=True) # tag stream!
 			return _TagReference(tag_group, tag_path)
@@ -238,7 +247,11 @@ class _TagLoadingState:
 			# data_ptr: u4
 			# definition_ptr: u4
 			size, = s_ulong.unpack(es.read(4))
-			es.skip(16)
+			try:
+				es.skip(16)
+			except _ByteStream.EOF as eof:
+				# same reasoning as above
+				raise ValueError("Unexpected end of stream while reading data field! Original error:" +  str(eof))
 			# read data from tag stream
 			value = self._stream.read(size)
 			if len(value) != size:
@@ -323,6 +336,8 @@ class _TagLoadingState:
 				return None
 		cast = _typing.cast
 		def read_array_field(es: _ByteStream, field_def: FIELD_TYPE):
+			if es.length_left() == 0:
+				return None
 			array_entries = []
 			array_def = cast(_FieldArrayDef, field_def)
 			for _ in range(array_def.count):
@@ -346,7 +361,7 @@ class _TagLoadingState:
 			struct_stream = _ByteStream(struct_data_buffer)
    
 			value = self._read_struct_data(struct_layout, struct_stream)
-			assert struct_stream.length_left() == 0
+			assert struct_stream.length_left() == 0, "Data left over after reading struct!"
    
 			return value
 	
@@ -368,26 +383,24 @@ class _TagLoadingState:
 		SPECIAL_READERS = self._tag_readers_special_field
   
 		for field_def in fields:
-			# exit early if the stream has ended, and the field isn't zero-length
-			# throws an error if this is inside an array/inlined struct
-			length_left = element_stream.length_left()
-			if (length_left == 0
-			 and field_def.type not in self.ZERO_SIZE_FIELDS
-    			 and not (field_def.type == "UselessPad" and not self._header.include_useless_padding)
-        		 and not (field_def.tag == 'pd64')):
-				if is_array:
-					raise ValueError("Expected early end of tag data inside an array/inlined-struct!")
-				break
-			
 			type_name = field_def.type
 			reader = READERS.get(type_name, None)
-			if reader is not None:
-				value = reader(element_stream)
-			else:
-				reader = SPECIAL_READERS.get(type_name, None)
-				if reader is None:
-					raise RuntimeError(f"Unexpected/unsupported field type: \"{type_name}\" (check your defintions)")
-				value = reader(element_stream, field_def)
+			try:
+				if reader is not None:
+					value = reader(element_stream)
+				else:
+					reader = SPECIAL_READERS.get(type_name, None)
+					if reader is None:
+						raise RuntimeError(f"Unexpected/unsupported field type: \"{type_name}\" (check your defintions)")
+					value = reader(element_stream, field_def)
+			except _ByteStream.EOF as eof:
+				# check if the stream ended at a field boundry
+				# if it did this could be a valid truncated tag created by implicit versioning (append)
+				# if not we either read the tag wrong or it's most likely corrupt
+				if element_stream.length_left() != 0:
+					raise ValueError(f"Unexpected end of tag data in the middle of a field of type \"{type_name}\"!")  from eof
+				elif is_array:
+					raise ValueError("Unexpected early end of tag data inside an array/inlined-struct!")  from eof
 			field = _TagField(field_def, value)
 			fields_data.append(field)
    
