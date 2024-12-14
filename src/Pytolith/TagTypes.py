@@ -1,3 +1,8 @@
+## Copyright 2024 <num0005@outlook.com>, some rights reserved
+##
+## This file is part of the Pytolith project licensed under the terms of the MIT license, see COPYING for more details
+## This notice must be retained in all copies of this file
+
 from __future__ import annotations as _
 
 from dataclasses import dataclass as _dataclass
