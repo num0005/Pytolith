@@ -13,7 +13,7 @@ sys.path.append(str(root_directory/"src"))
 import Pytolith
 import Pytolith.Definitions as definitions
 from Pytolith.Definitions.Layout import FIELD_TYPE, FieldSetDef, LayoutDef
-from Pytolith.TagLoader.Loader import _TagLoadingState
+from Pytolith._TagLoader.Loader import _TagLoadingState
 import io
 from Pytolith.TagTypes import TagField as _TagField
 
@@ -233,7 +233,7 @@ def build_accelerated_loads(defs: definitions.Definitions, version_info: str, st
      stream.writeline("}")
      stream.writeline(f"LAYOUT_VERSION = {repr(version_info)}")
      
-def generate_fast_loaders(defs: definitions.Definitions, output_file_name: str = "src/Pytolith/TagLoader/_FastTagLoaders.py"):
+def generate_fast_loaders(defs: definitions.Definitions, output_file_name: str = "src/Pytolith/_TagLoader/_FastTagLoaders.py"):
      print(f"Writing fast loaders to {output_file_name}")
      with open(output_file_name, "w") as f:
           code = CodeWriter()
