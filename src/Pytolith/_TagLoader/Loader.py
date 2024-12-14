@@ -9,7 +9,7 @@ from Pytolith.Definitions.Layout import FIELDS_TYPE,FIELD_TYPE, LayoutDef as _La
 from Pytolith.TagTypes import EulerAngles2D as _EulerAngles2D, EulerAngles3D as _EulerAngles3D, Point2D as _Point2D, RealPlane2D as _RealPlane2D
 from Pytolith.TagTypes import RealPlane3D as _RealPlane3D, Rectangle2D as _Rectangle2D, TagField as _TagField, TagFieldElement as _TagFieldElement, TagReference as _TagReference
 from Pytolith.TagTypes import TagBlock as _TagBlock, TagStruct as _TagStruct, TagGroupData as _TagGroupData, TagLayoutConfig as _TagLayoutConfig
-from Pytolith.TagLoader.Header import Header as _Header
+from Pytolith._TagLoader.Header import Header as _Header
 import io as _io
 import collections.abc as _abc
 import platform
@@ -18,7 +18,7 @@ def __load_fast_definitions():
 	if platform.python_implementation() == "PyPy":
 		return None, None
 	try:
-		from Pytolith.TagLoader._FastTagLoaders import LAYOUT_READERS, LAYOUT_VERSION
+		from Pytolith._TagLoader._FastTagLoaders import LAYOUT_READERS, LAYOUT_VERSION
 		return LAYOUT_READERS,LAYOUT_VERSION
 	except:
           return None,None

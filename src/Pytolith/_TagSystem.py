@@ -2,7 +2,7 @@ import os as _os
 import pathlib as _pathlib
 
 from Pytolith.Definitions import Definitions as _defintions
-from Pytolith.TagLoader.Loader import TagLoader as _loader
+from Pytolith._TagLoader.Loader import TagLoader as _loader
 
 def _load_default_definitions():
 	HALO2_PATH = _pathlib.Path("Data")/"TagLayouts"/"Halo2"
