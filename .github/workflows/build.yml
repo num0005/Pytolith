@@ -18,6 +18,8 @@ jobs:
       with:
         allow-prereleases: true
         python-version: "3.13"
+    - name: Disable local version
+      run: sed -i -e '/\[tool.setuptools_scm\]/a\' -e 'local_scheme = "no-local-version"' pyproject.toml
     - name: Install build tool
       run: python -m pip install build --user
     - name: build

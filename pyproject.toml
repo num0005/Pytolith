@@ -26,5 +26,5 @@ include-package-data = true
 
 [tool.setuptools.package-dir]
 
+# needed, CI will insert local_scheme = "no-local-version" using sed
 [tool.setuptools_scm]
-local_scheme = "no-local-version"
