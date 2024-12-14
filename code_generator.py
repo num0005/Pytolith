@@ -234,6 +234,7 @@ def build_accelerated_loads(defs: definitions.Definitions, version_info: str, st
      stream.writeline(f"LAYOUT_VERSION = {repr(version_info)}")
      
 def generate_fast_loaders(defs: definitions.Definitions, output_file_name: str = "src/Pytolith/TagLoader/_FastTagLoaders.py"):
+     print(f"Writing fast loaders to {output_file_name}")
      with open(output_file_name, "w") as f:
           code = CodeWriter()
           build_accelerated_loads(defs, defs.version_hash, code)

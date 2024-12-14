@@ -223,23 +223,30 @@ class _TagReaderCache:
 
 
 class _TagLoadingState:
-	__slots__ = ("_tag_group_mapping","_stream","_header","_group_def","_s_tbfd","fill_in_missing_fields",
+	__slots__ = ("_tag_group_mapping","_stream","_header","_group_def","_s_tbfd",
+              "_fast_tag_loaders",
+              "_tag_readers", "_tag_readers_special_field",
               "s_real", "s_long", "s_ulong", "s_short", "s_ushort", "s_char",
-              "s_uchar", "s_2short", "s_2real", "s_3real", "s_4real",
-              "_tag_readers", "_tag_readers_special_field")
+              "s_uchar", "s_2short", "s_2real", "s_3real", "s_4real")
   
 	class FieldSetTypes(str,_Enum):
 		TagBlockFieldData = 'tbfd'
 		TagStructFieldData = 'tsfd'
 	
-	def __init__(self, tag_group_mapping: _typing.Dict[str, _TagGroup], stream: _io.BufferedIOBase, fill_in_missing_fields: bool):
+	def __init__(self, tag_group_mapping: _typing.Dict[str, _TagGroup], stream: _io.BufferedIOBase, version_hash: bytes):
 		self._tag_group_mapping = tag_group_mapping
 		self._stream = stream
 		self._header = _Header()
 		self._group_def = None
 		self._s_tbfd = None
-		self.fill_in_missing_fields = fill_in_missing_fields
 		self._tag_readers = None
+
+		if _FAST_READERS_VERSION == version_hash:
+			self._fast_tag_loaders = _FAST_LAYOUT_READERS
+		else:
+			# bad version todo print a warning message here?
+			# this shouldn't really happen
+			self._fast_tag_loaders = None
 	
 	def read_header(self):
 		# read header and seek straight to data + setup definition
@@ -354,18 +361,19 @@ class _TagLoadingState:
 		endianness = self.endianness
 		readers = _TagReaderCache.get(endianness, self.is_big_endian)
 		# primitve type structures
-		self.s_real = readers.s_real
-		self.s_long = readers.s_long
 		s_ulong = readers.s_ulong
-		self.s_ulong = s_ulong
-		self.s_short = readers.s_short
-		self.s_ushort = readers.s_ushort
-		self.s_char = readers.s_char
-		self.s_uchar = readers.s_uchar
-		self.s_2short = readers.s_2short
-		self.s_2real = readers.s_2real
-		self.s_3real = readers.s_3real
-		self.s_4real = readers.s_4real
+		if self._fast_tag_loaders:
+			self.s_ulong = s_ulong
+			self.s_short = readers.s_short
+			self.s_ushort = readers.s_ushort
+			self.s_char = readers.s_char
+			self.s_uchar = readers.s_uchar
+			self.s_2short = readers.s_2short
+			self.s_2real = readers.s_2real
+			self.s_3real = readers.s_3real
+			self.s_4real = readers.s_4real
+			self.s_real = readers.s_real
+			self.s_long = readers.s_long
   
 		# tag reference (editor) layout:
 		# tag: cc4, tag type
@@ -618,11 +626,13 @@ class _TagLoadingState:
      
 
 class TagLoader:
+	__slots__ = ("_definitions", "_tag_group_mapping", "_defs_version")
 	def __init__(self, definitions: _Definitions):
 		self._definitions: _Definitions = definitions
 		self._tag_group_mapping = definitions.TagGroups
+		self._defs_version = definitions.version_hash
 
-	def load_tag(self, path: str, fill_in_missing_fields: bool = False):
+	def load_tag(self, path: str):
 		with open(path, 'rb') as f:
-			state = _TagLoadingState(self._tag_group_mapping, f, fill_in_missing_fields)
+			state = _TagLoadingState(self._tag_group_mapping, f, self._defs_version)
 			return state.read()
