@@ -21,3 +21,26 @@ tag1 = system.load_tag_from_path(path)
 # inspect the feign_death_chance setting
 print(tag1.fields.feign_death_chance)
 ```
+
+If you want to edit the XML definitions clone `https://github.com/num0005/Halo2TagLayouts` into a local path and then set the custom definitions when constructing the `TagSystem` object.
+
+
+```shell
+T:\> git clone https://github.com/num0005/Halo2TagLayouts
+Cloning into 'Halo2TagLayouts'...
+remote: Enumerating objects: 156, done.
+remote: Counting objects: 100% (156/156), done.
+remote: Compressing objects: 100% (96/96), done.
+remote: Total 156 (delta 60), reused 156 (delta 60), pack-reused 0 (from 0)
+Receiving objects: 100% (156/156), 384.26 KiB | 11.64 MiB/s, done.
+Resolving deltas: 100% (60/60), done.
+```
+```python
+	from Pytolith.Definitions import Definitions
+	from Pytolith import TagSystem
+
+	custom_defintions = Definitions()
+	custom_defintions.load_from_xml(r"T:\Halo2TagLayouts")
+
+	system = TagSystem(tag_definitions=custom_defintions)
+```
