@@ -14,6 +14,7 @@ import gc
 # load unpackage module
 root_directory = pathlib.Path(os.path.abspath(__file__)).parent
 sys.path.append(str(root_directory/"src"))
+sys.path = [str(root_directory/"src")] + sys.path
 
 import Pytolith
 import Pytolith.Definitions as definitions
@@ -69,12 +70,14 @@ class SpecialCasedReader(Protocol):
      def generate_cached_locals(self, stream: CodeWriter, state_var: str):
           """Emit code to cache any local variables needed if this reader is used"""
           ...
-     def generate_read_code(self, stream_var: str) -> str:
+     def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var: str) -> str:
           """Code for reading the field"""
           ...
      def is_applicable(self, field_def: FIELD_TYPE, loader_function_name: str):
           """Does it apply to this field?"""
           ...
+     def is_single_line_reader(self, field_def: FIELD_TYPE):
+          return True
      
 class PyStructTupleReader(SpecialCasedReader):
      def __init__(self, struct_name: str, length: int, simple_reader_name: str):
@@ -83,14 +86,54 @@ class PyStructTupleReader(SpecialCasedReader):
           self.simple_reader_name = simple_reader_name
      def generate_cached_locals(self, stream: CodeWriter, state_var: str):
           stream.cache_object_attribute(self.struct_name, state_var)
-     def generate_read_code(self, stream_var: str):
+     def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var: str):
           return f"{self.struct_name}.unpack({stream_var}.read({self.length}))"
      def is_applicable(self, field_def: FIELD_TYPE, loader_function_name: str):
           return self.simple_reader_name == loader_function_name
      
 class PyStructSingleReader(PyStructTupleReader):
-     def generate_read_code(self, stream_var: str):
-          return super().generate_read_code(stream_var) + "[0]"
+     def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var: str):
+          return super().generate_read_code(stream, field_def, stream_var) + "[0]"
+     
+class PyPadReader(SpecialCasedReader):
+	def __init__(self):
+		super().__init__()
+	def generate_cached_locals(self, stream, state_var):
+		return super().generate_cached_locals(stream, state_var)
+	def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var):
+		if field_def.tag == 'pd64':
+			return 'None'
+		DATA_VAR = "pad_data"
+		stream.writeline("try:")
+		case1 = stream.indent()
+		case1.writeline(f"{DATA_VAR} = bytes({stream_var}.read({field_def.length}))")
+		stream.writeline("except:")
+		case2 = stream.indent()
+		case2.writeline(f"{DATA_VAR} = bytes({stream_var}.read({stream_var}.length_left()))")
+  
+		return DATA_VAR
+  
+	def is_applicable(self, field_def, loader_function_name):
+		return field_def.type in ["Pad", "Skip"]
+	def is_single_line_reader(self, field_def):
+		return field_def.tag == 'pd64'
+
+class PyReaderBytesSize(SpecialCasedReader):
+     def __init__(self, field_type: str, size: int):
+          self.field_type = field_type
+          self.size = size
+     def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var):
+          return f"bytes({stream_var}.read({self.size}))"
+     def is_applicable(self, field_def, loader_function_name):
+          return self.field_type == field_def.type
+     
+class PyReaderNoData(SpecialCasedReader):
+     def __init__(self, field_type: str):
+          self.field_type = field_type
+     def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var):
+          return f"None"
+     def is_applicable(self, field_def, loader_function_name):
+          return self.field_type == field_def.type
      
 SPECIAL_CASE_READERS: list[SpecialCasedReader] = [
      ### primitive struct single value readers ###
@@ -106,6 +149,14 @@ SPECIAL_CASE_READERS: list[SpecialCasedReader] = [
      PyStructTupleReader("s_2real", 8, "read_two_reals"),
      PyStructTupleReader("s_3real", 12, "read_three_reals"),
      PyStructTupleReader("s_4real", 16, "read_four_reals"),
+     ### pad readers
+     PyPadReader(),
+     ### bytes-only readers
+     PyReaderBytesSize("VertexBuffer", 0x20),
+     PyReaderBytesSize("Ptr", 4),
+     ### "readers" for fields that don't actually contain any data
+     PyReaderNoData("Explanation"),
+     PyReaderNoData("Custom"),
 ]
           
 def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, state_var: str, es_stream_var: str, fields_var: str, data_var: str):
@@ -116,11 +167,12 @@ def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, st
      # create a fake loading state object
      # used to detect semi-automatically what loaders can be special-cased
      # as well as which ones need the field def
-     fake_loading_state = _TagLoadingState({}, None, False)
+     fake_loading_state = _TagLoadingState({}, None, None)
      fake_loading_state._setup_tag_readers()
  
      @dataclass 
      class LoadStatement:
+          field_def: FIELD_TYPE
           field_type: str
           field_index: int
           use_field_index: bool
@@ -135,7 +187,7 @@ def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, st
 
           custom_fast_reader = next((reader for reader in SPECIAL_CASE_READERS if reader.is_applicable(field_def, loader_function.__name__)), None)
 
-          load_statements.append(LoadStatement(field_def.type, i, use_field_index, custom_fast_reader))
+          load_statements.append(LoadStatement(field_def, field_def.type, i, use_field_index, custom_fast_reader))
   
           if custom_fast_reader:
                fast_loaders_used.add(custom_fast_reader)
@@ -166,7 +218,7 @@ def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, st
      for load_statement in load_statements:
           field_def_state = f"{fields_var}[{load_statement.field_index}]"
           if load_statement.special_reader:
-               value_state = load_statement.special_reader.generate_read_code(es_stream_var)
+               value_state = load_statement.special_reader.generate_read_code(stream, load_statement.field_def, es_stream_var)
           elif load_statement.use_field_index:
                stream.writeline(f"fd = {field_def_state}")
                field_def_state = "fd"

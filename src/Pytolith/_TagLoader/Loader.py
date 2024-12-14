@@ -193,7 +193,7 @@ class _TagReaderCache:
 			try:
 				return bytes(es.read(field_def.length))
 			except:
-				return es.read(es.length_left())
+				return bytes(es.read(es.length_left()))
 
 		return _TagReaderCache(
 					s_real = s_real,
@@ -328,7 +328,7 @@ class _TagLoadingState:
    
 		fast_loader = None
 		try:
-			fast_loader = _FAST_LAYOUT_READERS[layout.unique_id][version]
+			fast_loader = self._fast_tag_loaders[layout.unique_id][version]
 		except:
 			pass
 			
