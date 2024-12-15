@@ -18,7 +18,7 @@ sys.path = [str(root_directory/"src")] + sys.path
 
 import Pytolith
 import Pytolith.Definitions as definitions
-from Pytolith.Definitions.Layout import FIELD_TYPE, FieldSetDef, LayoutDef
+from Pytolith.Definitions.Layout import _UNPACKAGE_TAG_RAW_SIZES, FIELD_TYPE, FieldSetDef, LayoutDef
 from Pytolith._TagLoader.Loader import _TagLoadingState
 import io
 from Pytolith.TagTypes import TagField as _TagField
@@ -77,7 +77,17 @@ class SpecialCasedReader(Protocol):
           """Does it apply to this field?"""
           ...
      def is_single_line_reader(self, field_def: FIELD_TYPE):
+          """
+         	Does the reader use more than one line? 
+          Single line readers simply return the read statement, while multiline readers write to the code stream
+          """
           return True
+     def length_for_tag_reference(self, field_def):
+          """
+          When reading the tag to build a tag reference library, what is the length of this field?
+          Return None if the field needs to be read even in that mode.
+          """
+          return None
      
 class PyStructTupleReader(SpecialCasedReader):
      def __init__(self, struct_name: str, length: int, simple_reader_name: str):
@@ -90,6 +100,8 @@ class PyStructTupleReader(SpecialCasedReader):
           return f"{self.struct_name}.unpack({stream_var}.read({self.length}))"
      def is_applicable(self, field_def: FIELD_TYPE, loader_function_name: str):
           return self.simple_reader_name == loader_function_name
+     def length_for_tag_reference(self, field_def):
+          return self.length
      
 class PyStructSingleReader(PyStructTupleReader):
      def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var: str):
@@ -117,23 +129,40 @@ class PyPadReader(SpecialCasedReader):
 		return field_def.type in ["Pad", "Skip"]
 	def is_single_line_reader(self, field_def):
 		return field_def.tag == 'pd64'
+	def length_for_tag_reference(self, field_def):
+		if field_def.tag == 'pd64':
+			return 0
+		return field_def.length
 
-class PyReaderBytesSize(SpecialCasedReader):
-     def __init__(self, field_type: str, size: int):
+class SpecialCasedReaderByFieldType(SpecialCasedReader):
+     def __init__(self, field_type: str):
           self.field_type = field_type
+     def is_applicable(self, field_def, loader_function_name):
+          return self.field_type == field_def.type
+
+class PyReaderBytesSize(SpecialCasedReaderByFieldType):
+     def __init__(self, field_type: str, size: int):
+          super().__init__(field_type)
           self.size = size
      def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var):
           return f"bytes({stream_var}.read({self.size}))"
-     def is_applicable(self, field_def, loader_function_name):
-          return self.field_type == field_def.type
+     def length_for_tag_reference(self, field_def):
+          return self.size
      
-class PyReaderNoData(SpecialCasedReader):
-     def __init__(self, field_type: str):
-          self.field_type = field_type
+class PyReaderStringSize(SpecialCasedReaderByFieldType):
+     def __init__(self, field_type: str, size: int):
+          super().__init__(field_type)
+          self.size = size
+     def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var):
+          return f"{stream_var}.read_string({self.size})"
+     def length_for_tag_reference(self, field_def):
+          return self.size
+     
+class PyReaderNoData(SpecialCasedReaderByFieldType):
      def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var):
           return f"None"
-     def is_applicable(self, field_def, loader_function_name):
-          return self.field_type == field_def.type
+     def length_for_tag_reference(self, field_def):
+          return 0
      
 SPECIAL_CASE_READERS: list[SpecialCasedReader] = [
      ### primitive struct single value readers ###
@@ -154,12 +183,15 @@ SPECIAL_CASE_READERS: list[SpecialCasedReader] = [
      ### bytes-only readers
      PyReaderBytesSize("VertexBuffer", 0x20),
      PyReaderBytesSize("Ptr", 4),
+     ## str-only readers
+     PyReaderStringSize("String", 0x20),
+     PyReaderStringSize("LongString", 0x100),
      ### "readers" for fields that don't actually contain any data
      PyReaderNoData("Explanation"),
      PyReaderNoData("Custom"),
 ]
           
-def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, state_var: str, es_stream_var: str, fields_var: str, data_var: str):
+def build_code_for_layout_version(defintion: FieldSetDef,  stream: CodeWriter, tag_ref_reader: bool, state_var: str, es_stream_var: str, fields_var: str, data_var: str):
      field_loaders_used_standard = set()
      field_loaders_used_special = set()
      fast_loaders_used: set[SpecialCasedReader] = set()
@@ -167,16 +199,25 @@ def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, st
      # create a fake loading state object
      # used to detect semi-automatically what loaders can be special-cased
      # as well as which ones need the field def
-     fake_loading_state = _TagLoadingState({}, None, None)
+     fake_loading_state = _TagLoadingState({}, None, None, False)
      fake_loading_state._setup_tag_readers()
  
      @dataclass 
      class LoadStatement:
+          @property
+          def field_type(self):
+               return self.field_def.type
+          
           field_def: FIELD_TYPE
-          field_type: str
+          """Field definition"""
           field_index: int
+          """Field index in the definitions"""
           use_field_index: bool
+          """Does the reader use the field definition? Should probably be False for any `special_reader` functions"""
           special_reader: None|SpecialCasedReader
+          """Special case reader, if set the data will be read directly instead of calling out to a reader function"""
+          skip_ahead: None|int
+          """How far to skip ahead, only valid for tag reference only readers. 0 != None, as None flags fields that need to be read while 0 indicates the field can be skipped but is zero length"""
 
      load_statements: list[LoadStatement] = []
   
@@ -186,8 +227,18 @@ def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, st
           loader_function = fake_loading_state._tag_readers_special_field[field_def.type] if use_field_index else fake_loading_state._tag_readers[field_def.type]
 
           custom_fast_reader = next((reader for reader in SPECIAL_CASE_READERS if reader.is_applicable(field_def, loader_function.__name__)), None)
+          
+          skip_ahead = None
+          if custom_fast_reader:
+               skip_ahead = custom_fast_reader.length_for_tag_reference(field_def)
+          else:
+               skip_ahead = _UNPACKAGE_TAG_RAW_SIZES.get(field_def.type, None)
 
-          load_statements.append(LoadStatement(field_def, field_def.type, i, use_field_index, custom_fast_reader))
+          load_statements.append(LoadStatement(field_def, i, use_field_index, custom_fast_reader, skip_ahead))
+          
+          # skip marking readers as used if they would have been skipped
+          if tag_ref_reader and skip_ahead is not None:
+               continue
   
           if custom_fast_reader:
                fast_loaders_used.add(custom_fast_reader)
@@ -195,6 +246,33 @@ def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, st
                field_loaders_used_special.add(field_def.type)
           else:
                field_loaders_used_standard.add(field_def.type)
+     
+     if tag_ref_reader:
+          optimized_load_statements: list[LoadStatement] = []
+          previous_skip_field = None
+          for statement in load_statements:
+               # is this an unskippable read?
+               if statement.skip_ahead is None:
+                    previous_skip_field = None
+                    optimized_load_statements.append(statement)
+                    continue
+               # mergable statement otherwise
+               if previous_skip_field is None:
+                    # make and insert a "fake" statement to indicate skippable data
+                    previous_skip_field = LoadStatement(None, -1, False, PyReaderNoData("Fake Field"), 0)
+                    optimized_load_statements.append(previous_skip_field)
+               previous_skip_field.skip_ahead += statement.skip_ahead
+          
+          # remove last entry if it's just a skip
+          # this simplifies our error handling logic
+          # while also removing a useless statement
+          if len(optimized_load_statements) > 0 and optimized_load_statements[-1].skip_ahead is not None:
+               optimized_load_statements = optimized_load_statements[:-1]
+          # check if this would result in no-op function
+          if len(optimized_load_statements) == 0:
+               return None
+          load_statements = optimized_load_statements
+               
      def local_reader_name(field_name):
           return f"{field_name}_reader"
      # cache reader lookup dicts
@@ -203,7 +281,9 @@ def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, st
      if field_loaders_used_special:
           stream.writeline(f"SPECIAL_READERS = {state_var}._tag_readers_special_field")
      stream.writeline()
-     stream.writeline(f"append = {data_var}.append")
+     if not tag_ref_reader:
+          stream.writeline(f"append = {data_var}.append")
+     cached_tag_refs = False
      stream.writeline()
      # cache the actual readers
      for reader in field_loaders_used_standard:
@@ -217,44 +297,68 @@ def build_code_for_layout_version(defintion: FieldSetDef, stream: CodeWriter, st
      # generate load commands
      for load_statement in load_statements:
           field_def_state = f"{fields_var}[{load_statement.field_index}]"
+          if tag_ref_reader and load_statement.skip_ahead is not None:
+               if load_statement.skip_ahead != 0:
+                    stream.writeline(f"{es_stream_var}.skip({load_statement.skip_ahead})")
+               continue
+          
           if load_statement.special_reader:
                value_state = load_statement.special_reader.generate_read_code(stream, load_statement.field_def, es_stream_var)
           elif load_statement.use_field_index:
-               stream.writeline(f"fd = {field_def_state}")
-               field_def_state = "fd"
+               # cache the tag def unless we are only reading the tag refs
+               if not tag_ref_reader:
+                    stream.writeline(f"fd = {field_def_state}")
+                    field_def_state = "fd"
                value_state = f"{local_reader_name(load_statement.field_type)}({es_stream_var}, {field_def_state})"
           else:
                value_state = f"{local_reader_name(load_statement.field_type)}({es_stream_var})"
-          field_state = f"_TagField({field_def_state}, {value_state})"
-          stream.writeline(f"append({field_state})")
+          if not tag_ref_reader:
+               field_state = f"_TagField({field_def_state}, {value_state})"
+               stream.writeline(f"append({field_state})")
+          elif load_statement.field_def.type == "TagReference":
+               # write the value only if it's a tag reference
+               if not cached_tag_refs:
+                    stream.writeline(f"append = {state_var}._tag_references.append")
+               stream.writeline(f"append({value_state})")
+          else:
+               # otherwise just read the data and discard it
+               stream.writeline(f"{value_state}")
      stream.writeline()
      return True
   
-def build_loader_for_layout_version(defintion: LayoutDef, version: int, stream: CodeWriter):
+def build_loader_for_layout_version(defintion: LayoutDef, only_read_tag_ref: bool, version: int, stream: CodeWriter):
      function_name = "__reader_" + defintion.unique_id.replace(":", "__") + f"_version_{version}"
+     if only_read_tag_ref:
+          function_name = "__tag_refs" + function_name
      STATE_VAR = "arg_loader"
      STREAM_VAR = "arg_element"
      FIELDS_VAR = "arg_defs"
-     ARGS = (STATE_VAR, STREAM_VAR, FIELDS_VAR, "data_out")
+     DATA_OUT_FIELD = "data_out"
+     ARGS = (STATE_VAR, STREAM_VAR, FIELDS_VAR, DATA_OUT_FIELD)
      function_code_stream = stream.write_function(function_name, ARGS)
      function_code_stream.write_docstring("Autogenerated internal function, DO NOT CALL DIRECTLY.")
-     should_use = build_code_for_layout_version(defintion.versions[version], function_code_stream, *ARGS)
+     should_use = build_code_for_layout_version(defintion.versions[version], function_code_stream, only_read_tag_ref, *ARGS)
 
      return function_name, should_use
 
-def build_loader_for_layout(defintion: LayoutDef, file: CodeWriter):
+def build_loader_for_layout(defintion: LayoutDef, only_read_tag_ref: bool, file: CodeWriter):
      stream = CodeWriter()
      stream.indent_level = file.indent_level
      loader_functions_for_version = []
-     should_use = False
+     should_use = only_read_tag_ref
      for version in range(len(defintion.versions)):
-          stream.write_commment(f"Static loader for {defintion.unique_id} for version {version}")
-          stream.write_commment(f"This function is automatically generated, do not call it directly or edit it")
-          function_name, passed = build_loader_for_layout_version(defintion, version, stream)
-          stream.writeline()
-          stream.writeline()
+          function_stream = CodeWriter()
+          function_stream.write_commment(f"Static loader for {defintion.unique_id} for version {version}")
+          function_stream.write_commment(f"This function is automatically generated, do not call it directly or edit it")
+          function_name, passed = build_loader_for_layout_version(defintion, only_read_tag_ref, version, function_stream)
+          if passed or not only_read_tag_ref:
+               stream.writeline()
+               stream.stream.write(str(function_stream))
+               stream.writeline()
+          else:
+               function_name = None
           loader_functions_for_version.append(function_name)
-          if passed:
+          if passed or only_read_tag_ref:
                should_use = True
      
      if should_use:
@@ -262,6 +366,17 @@ def build_loader_for_layout(defintion: LayoutDef, file: CodeWriter):
           return tuple(loader_functions_for_version)
      else:
           return None
+     
+def write_layout_table(stream: CodeWriter, name: str, loader_functions):
+     stream.writeline(name + " = {")
+     entry_stream = stream.indent()
+     for key, functions in loader_functions.items():
+          funcs_as_strings = (f or "None" for f in functions)
+          function_string = ",".join(funcs_as_strings)
+          if len(functions) == 1:
+               function_string += ','
+          entry_stream.writeline(f"'{key}' : ({function_string}),")
+     stream.writeline("}")
 
 def build_accelerated_loads(defs: definitions.Definitions, version_info: str, stream: CodeWriter):
      """Generate a python file containing fast tag loaders"""
@@ -275,19 +390,16 @@ def build_accelerated_loads(defs: definitions.Definitions, version_info: str, st
      stream.writeline()
      stream.writeline("from Pytolith.TagTypes import TagField as _TagField")
      loader_functions: dict[str, tuple[str]] = dict()
+     loader_functions_tag_ref: dict[str, tuple[str]] = dict()
      for id, layout in defs.id_to_layout.items():
-          loaders_per_version = build_loader_for_layout(layout, stream)
+          loaders_per_version = build_loader_for_layout(layout, False, stream)
           if loaders_per_version:
                loader_functions[id] = loaders_per_version
-     stream.writeline("LAYOUT_READERS = {")
-     entry_stream = stream.indent()
-     for key, functions in loader_functions.items():
-          function_string = ",".join(functions)
-          if len(functions) == 1:
-               function_string += ','
-          entry_stream.writeline(f"'{key}' : ({function_string}),")
-          
-     stream.writeline("}")
+          loader_functions_tag_ref[id] = build_loader_for_layout(layout, True, stream)
+
+     write_layout_table(stream, "LAYOUT_READERS", loader_functions)
+     stream.writeline()
+     write_layout_table(stream, "LAYOUT_READERS_TAG_REF", loader_functions_tag_ref)
      stream.writeline(f"LAYOUT_VERSION = {repr(version_info)}")
      
 def generate_fast_loaders(defs: definitions.Definitions, output_file_name: str = "src/Pytolith/_TagLoader/_FastTagLoaders.py"):

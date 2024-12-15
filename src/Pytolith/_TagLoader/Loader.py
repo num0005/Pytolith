@@ -10,7 +10,7 @@ import struct as _struct
 import typing as _typing
 from Pytolith.Definitions import Definitions as _Definitions, TagGroup as _TagGroup
 from Pytolith.Definitions.Fields import FieldArrayDef as _FieldArrayDef
-from Pytolith.Definitions.Layout import FIELDS_TYPE,FIELD_TYPE, LayoutDef as _LayoutDef
+from Pytolith.Definitions.Layout import _UNPACKAGE_TAG_RAW_SIZES, FIELDS_TYPE,FIELD_TYPE, FieldSetDef as _FieldSetDef, LayoutDef as _LayoutDef
 from Pytolith.TagTypes import EulerAngles2D as _EulerAngles2D, EulerAngles3D as _EulerAngles3D, Point2D as _Point2D, RealPlane2D as _RealPlane2D
 from Pytolith.TagTypes import RealPlane3D as _RealPlane3D, Rectangle2D as _Rectangle2D, TagField as _TagField, TagFieldElement as _TagFieldElement, TagReference as _TagReference
 from Pytolith.TagTypes import TagBlock as _TagBlock, TagStruct as _TagStruct, TagGroupData as _TagGroupData, TagLayoutConfig as _TagLayoutConfig
@@ -21,15 +21,18 @@ import platform
 
 def __load_fast_definitions():
 	if platform.python_implementation() == "PyPy":
-		return None, None
+		return None, None, None
 	try:
+      
+		# change this line to enable fast loaders for layouts
+		from Pytolith._TagLoader._FastTagLoaders import LAYOUT_READERS, LAYOUT_READERS_TAG_REF, LAYOUT_VERSION
 		from Pytolith._TagLoader._FastTagLoaders import LAYOUT_READERS, LAYOUT_VERSION
-		return LAYOUT_READERS,LAYOUT_VERSION
+		return LAYOUT_READERS,LAYOUT_READERS_TAG_REF,LAYOUT_VERSION
 	except:
-          return None,None
+          return None, None, None
 
 
-_FAST_LAYOUT_READERS,_FAST_READERS_VERSION = __load_fast_definitions()
+_FAST_LAYOUT_READERS,_FAST_TAG_REF_READERS,_FAST_READERS_VERSION = __load_fast_definitions()
 
 class _ByteStream:
 	class EOF(ValueError):
@@ -229,6 +232,7 @@ class _TagReaderCache:
 
 class _TagLoadingState:
 	__slots__ = ("_tag_group_mapping","_stream","_header","_group_def","_s_tbfd",
+              "_element_parser", "_tag_references",
               "_fast_tag_loaders",
               "_tag_readers", "_tag_readers_special_field",
               "s_real", "s_long", "s_ulong", "s_short", "s_ushort", "s_char",
@@ -238,16 +242,18 @@ class _TagLoadingState:
 		TagBlockFieldData = 'tbfd'
 		TagStructFieldData = 'tsfd'
 	
-	def __init__(self, tag_group_mapping: _typing.Dict[str, _TagGroup], stream: _io.BufferedIOBase, version_hash: bytes):
+	def __init__(self, tag_group_mapping: _typing.Dict[str, _TagGroup], stream: _io.BufferedIOBase, version_hash: bytes, tag_reference_reader: bool):
 		self._tag_group_mapping = tag_group_mapping
 		self._stream = stream
 		self._header = _Header()
 		self._group_def = None
 		self._s_tbfd = None
 		self._tag_readers = None
+		self._tag_references: list[_TagReference]|None = [] if tag_reference_reader else None
+		self._element_parser = self._parse_fields
 
 		if _FAST_READERS_VERSION == version_hash:
-			self._fast_tag_loaders = _FAST_LAYOUT_READERS
+			self._fast_tag_loaders = _FAST_TAG_REF_READERS if tag_reference_reader else _FAST_LAYOUT_READERS
 		else:
 			# bad version todo print a warning message here?
 			# this shouldn't really happen
@@ -274,6 +280,16 @@ class _TagLoadingState:
 		root_tag_block = self._read_tag_block(self._group_def.layout, 1)
 		return _TagGroupData(root_tag_block, self._group_def)
 
+	def read_tag_references(self) -> list[_TagReference]:
+		self.read_header()
+		self._setup_tag_readers()
+		# configure special reader mode that skips most data
+		self._tag_references = []
+		self._element_parser = self._parse_tag_references
+		# read
+		self._read_tag_block(self._group_def.layout, 1)
+		return self._tag_references
+
 	def _read_tag_block(self, layout: _LayoutDef, block_count: int) -> _TagBlock:
 		versioned_layout, count = self._read_field_set_header(layout, self.FieldSetTypes.TagBlockFieldData)
   
@@ -281,6 +297,12 @@ class _TagLoadingState:
 			count = block_count
 		if count != block_count and block_count is not None:
 			raise ValueError(f"Unexpected number of elements for tag block, expected {block_count}, got {count}")
+
+		# fast loaders for tag refs didn't end up being any faster
+		# layout we don't need to parse when building the tag reference database 
+		if versioned_layout._fast_loader is True:
+			self._stream.seek(versioned_layout.element_size*count, 1)
+			return None
 
 		elements: list[_TagFieldElement] = []
 
@@ -329,6 +351,13 @@ class _TagLoadingState:
 		fast_loader = None
 		try:
 			fast_loader = self._fast_tag_loaders[layout.unique_id][version]
+			#fast_loader = self._fast_tag_loaders[layout.unique_id].get(version, None)
+			# if fast loaders are configured and we succeed in looking up the layout
+			# but the version parser is set to None that means the layout only contains element data
+			# and we can skip parsing it
+			# we record this by setting fast_loader to True instead of a callable
+			if fast_loader is None and self._tag_references is not None:
+				fast_loader = True
 		except:
 			pass
 			
@@ -345,8 +374,8 @@ class _TagLoadingState:
 	def _parse_field_data_element(self, element_stream: _ByteStream, layout: _TagLayoutConfig):
 		field_set_def = layout.fieldset_defintion
 		fast_loader = layout._fast_loader
+		fields_data = []
 		if fast_loader:
-			fields_data = []
 			try:
 				fast_loader(self, element_stream, field_set_def.merged_fields, fields_data)
 			except _ByteStream.EOF as eof:
@@ -355,9 +384,13 @@ class _TagLoadingState:
 				# if not we either read the tag wrong or it's most likely corrupt
 				if element_stream.length_left() != 0:
 					raise ValueError(f"Unexpected end of tag data in the middle of a layout of type \"{layout.definition.unique_id}\"!")  from eof
+			except Exception as e:
+				print("Unhandled error!", e, e.__traceback__)
+				raise
 		else:
-			fields_data = self._parse_fields(element_stream, field_set_def.merged_fields, is_array=False)
-		layout.add_missing_fields(fields_data)
+			self._element_parser(element_stream, field_set_def.merged_fields, fields_data, is_array=False)
+		if self._tag_references is None:
+			layout.add_missing_fields(fields_data)
 		return _TagFieldElement(tuple(fields_data), 
                          field_set_def.auto_c_name_to_field_index,
                          field_set_def.auto_pascal_name_to_field_index)
@@ -531,7 +564,9 @@ class _TagLoadingState:
 			array_entries = []
 			array_def = cast(_FieldArrayDef, field_def)
 			for _ in range(array_def.count):
-				array_entries.append(tuple(self._parse_fields(es, array_def.entry_fields, is_array=True)))
+				entry_data = []
+				self._element_parser(es, array_def.entry_fields, entry_data, is_array=True)
+				array_entries.append(tuple(entry_data))
 			return tuple(array_entries)
 
 		def read_struct_field(es: _ByteStream, field_def: FIELD_TYPE):
@@ -539,11 +574,18 @@ class _TagLoadingState:
 			if s_count != 1 and s_count is not None:
 				raise ValueError(f"Expected a single block for structure, got {s_count}")
 
-			struct_data_buffer = es.read(min(struct_layout.element_size, es.length_left()))
+			length = min(struct_layout.element_size, es.length_left())
+			# skip in tag ref only mode
+			if struct_layout._fast_loader is True:
+				es.skip(length)
+				return None
+			struct_data_buffer = es.read(length)
 			struct_stream = _ByteStream(struct_data_buffer)
    
 			value = self._read_struct_data(struct_layout, struct_stream)
-			assert struct_stream.length_left() == 0, "Data left over after reading struct!"
+			# only check is if tag references are not being parsed
+			# it's valid for tag reference parsers to leave data after the end of stream
+			assert (self._tag_references is not None) or (struct_stream.length_left() == 0), "Data left over after reading struct!"
    
 			return value
 
@@ -559,8 +601,7 @@ class _TagLoadingState:
 		}
 
    
-	def _parse_fields(self, element_stream: _ByteStream, fields: FIELDS_TYPE, is_array: bool = False):
-		fields_data: list[_TagField] = []
+	def _parse_fields(self, element_stream: _ByteStream, fields: FIELDS_TYPE, fields_data: list[_TagField], is_array: bool = False):
 		# we use two lookup tables because passing the definition to all readers
 		# actually slows down parsing a little bit
 		READERS = self._tag_readers
@@ -587,8 +628,39 @@ class _TagLoadingState:
 					raise ValueError("Unexpected early end of tag data inside an array/inlined-struct!")  from eof
 			field = _TagField(field_def, value)
 			fields_data.append(field)
-   
-		return fields_data
+
+	def _parse_tag_references(self, element_stream: _ByteStream, fields: FIELDS_TYPE, unused_element_data: list, is_array: bool = False):
+		field_lengths = _UNPACKAGE_TAG_RAW_SIZES
+		READERS = self._tag_readers
+		SPECIAL_READERS = self._tag_readers_special_field
+  
+		for field_def in fields:
+			type_name = field_def.type
+			field_length = field_lengths.get(type_name, None)
+			reader = READERS.get(type_name, None)
+			try:
+				if field_length is not None:
+					element_stream.skip(field_length)
+					continue
+				reader = SPECIAL_READERS.get(type_name, None)
+				if reader is not None:
+					# tag reference is not one of these so just continue
+					reader(element_stream, field_def)
+					continue
+				reader = READERS.get(type_name, None)
+				if reader is None:
+					raise RuntimeError(f"Unexpected/unsupported field type: \"{type_name}\" (check your defintions)")
+				value = reader(element_stream)
+				if type_name == "TagReference":
+					self._tag_references.append(value)
+			except _ByteStream.EOF as eof:
+				# check if the stream ended at a field boundry
+				# if it did this could be a valid truncated tag created by implicit versioning (append)
+				# if not we either read the tag wrong or it's most likely corrupt
+				if element_stream.length_left() != 0:
+					raise ValueError(f"Unexpected end of tag data in the middle of a field of type \"{type_name}\"!")  from eof
+				elif is_array:
+					raise ValueError("Unexpected early end of tag data inside an array/inlined-struct!")  from eof
 
 			
 	def read_cc4(self):
@@ -639,5 +711,9 @@ class TagLoader:
 
 	def load_tag(self, path: str):
 		with open(path, 'rb') as f:
-			state = _TagLoadingState(self._tag_group_mapping, f, self._defs_version)
+			state = _TagLoadingState(self._tag_group_mapping, f, self._defs_version, False)
 			return state.read()
+	def get_tag_references(self, path: str):
+		with open(path, 'rb') as f:
+			state = _TagLoadingState(self._tag_group_mapping, f, self._defs_version, True)
+			return state.read_tag_references()

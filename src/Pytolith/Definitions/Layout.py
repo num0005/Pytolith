@@ -213,6 +213,11 @@ class FieldSetDef:
 	sizeof_source: str|None = None
 	"""`sizeof` source string extracted from tag defintions. Using this for anything is highly not recommended"""
 
+_UNPACKAGE_TAG_RAW_SIZES = dict(FieldSetDef.FIELD_LENGTHS)
+"""Size of various fields that don't need special handling in unpackaged tags"""
+_UNPACKAGE_TAG_RAW_SIZES.pop("StringId", None)
+_UNPACKAGE_TAG_RAW_SIZES.update({"VertexBuffer": 0x20, "Ptr": 0x4})
+
 
 @_dataclass(frozen=True, slots=True)
 class LayoutDef:

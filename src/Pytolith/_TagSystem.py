@@ -38,6 +38,9 @@ class TagSystem():
 		self.tag_definitions = tag_definitions
 		self._loader = _loader(self.tag_definitions)
 		self.tag_folder = tag_folder
+  
+	def get_tag_references_for_tag_at_path(self, file_path: str):
+		return self._loader.get_tag_references(file_path)
 
 	def load_tag_from_path(self, file_path: str):
 		return self._loader.load_tag(file_path)
