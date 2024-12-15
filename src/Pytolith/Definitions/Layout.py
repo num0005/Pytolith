@@ -104,7 +104,7 @@ class FieldSetDef:
 		"LongFlags": 4,
 		"LongBlockFlags": 4,
 		"Point2D": 4,
-		"Rectangle2D": 4,
+		"Rectangle2D": 8,
 		"RgbColor": 4,
 		"AgbColor": 4,
 		"RealPoint2D": 8,
