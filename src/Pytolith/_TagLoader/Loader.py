@@ -46,7 +46,7 @@ class _ByteStream:
   
 		self.offset = 0
 		self.length = len(self.array)
-  
+
 	def read(self, size: int):
 		if self.offset + size > self.length:
 			raise _ByteStream.EOF(f"Not enough space in stream to read {size} bytes ({size}>{len(self.array)-self.offset})!")
@@ -60,7 +60,19 @@ class _ByteStream:
 		self.offset += size
 
 	def read_string(self, length):
-		return self.read(length).tobytes().decode(errors="surrogateescape")
+		return str(self.read(length), errors="surrogateescape")
+
+	def read_cc4(self):
+		"""Reads a 4CC as a big endian value"""
+		data = self.read(4)
+		# map Halos NONE to None
+		if data == b"\xff\xff\xff\xff":
+			return None
+		# also map NULL to None
+		# shouldn't come up too often (if ever?)
+		if data == b"\0\0\0\0":
+			return None
+		return str(data, errors="surrogateescape")
 
 	def length_left(self):
 		return self.length - self.offset
@@ -150,10 +162,12 @@ class _TagReaderCache:
   
 		if is_big_endian:
 			def read_cc4(es: _ByteStream):
-				return es.read_string(4)
+				return es.read_cc4()
 		else:
 			def read_cc4(es: _ByteStream) -> str:
-				string = es.read_string(4)
+				string = es.read_cc4()
+				if string is None:
+					return None
 				return string[::-1]
 		def read_real(es: _ByteStream) -> float:
 			return s_real.unpack(es.read(4))[0]
