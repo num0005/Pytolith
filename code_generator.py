@@ -412,5 +412,5 @@ def generate_fast_loaders(defs: definitions.Definitions, output_file_name: str =
      
      
 if __name__ == "__main__":
-     system = Pytolith.TagSystem()
+     system = Pytolith.TagSystem("")
      generate_fast_loaders(system.tag_definitions)
