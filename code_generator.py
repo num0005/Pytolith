@@ -78,7 +78,7 @@ class SpecialCasedReader(Protocol):
           ...
      def is_single_line_reader(self, field_def: FIELD_TYPE):
           """
-         	Does the reader use more than one line? 
+              Does the reader use more than one line? 
           Single line readers simply return the read statement, while multiline readers write to the code stream
           """
           return True
@@ -108,31 +108,31 @@ class PyStructSingleReader(PyStructTupleReader):
           return super().generate_read_code(stream, field_def, stream_var) + "[0]"
      
 class PyPadReader(SpecialCasedReader):
-	def __init__(self):
-		super().__init__()
-	def generate_cached_locals(self, stream, state_var):
-		return super().generate_cached_locals(stream, state_var)
-	def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var):
-		if field_def.tag == 'pd64':
-			return 'None'
-		DATA_VAR = "pad_data"
-		stream.writeline("try:")
-		case1 = stream.indent()
-		case1.writeline(f"{DATA_VAR} = bytes({stream_var}.read({field_def.length}))")
-		stream.writeline("except:")
-		case2 = stream.indent()
-		case2.writeline(f"{DATA_VAR} = bytes({stream_var}.read({stream_var}.length_left()))")
+     def __init__(self):
+          super().__init__()
+     def generate_cached_locals(self, stream, state_var):
+          return super().generate_cached_locals(stream, state_var)
+     def generate_read_code(self, stream: CodeWriter, field_def: FIELD_TYPE, stream_var):
+          if field_def.tag == 'pd64':
+               return 'None'
+          DATA_VAR = "pad_data"
+          stream.writeline("try:")
+          case1 = stream.indent()
+          case1.writeline(f"{DATA_VAR} = bytes({stream_var}.read({field_def.length}))")
+          stream.writeline("except:")
+          case2 = stream.indent()
+          case2.writeline(f"{DATA_VAR} = bytes({stream_var}.read({stream_var}.length_left()))")
   
-		return DATA_VAR
+          return DATA_VAR
   
-	def is_applicable(self, field_def, loader_function_name):
-		return field_def.type in ["Pad", "Skip"]
-	def is_single_line_reader(self, field_def):
-		return field_def.tag == 'pd64'
-	def length_for_tag_reference(self, field_def):
-		if field_def.tag == 'pd64':
-			return 0
-		return field_def.length
+     def is_applicable(self, field_def, loader_function_name):
+          return field_def.type in ["Pad", "Skip"]
+     def is_single_line_reader(self, field_def):
+          return field_def.tag == 'pd64'
+     def length_for_tag_reference(self, field_def):
+          if field_def.tag == 'pd64':
+               return 0
+          return field_def.length
 
 class SpecialCasedReaderByFieldType(SpecialCasedReader):
      def __init__(self, field_type: str):

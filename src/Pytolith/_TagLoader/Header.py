@@ -10,14 +10,14 @@ import functools as _functools
 import io as _io
 
 def __string_to_tag(string: str, is_big_endian: bool):
-	assert len(string) <= 4, "String too long to be 4 byte tag!"
+     assert len(string) <= 4, "String too long to be 4 byte tag!"
 
-	string = string.ljust(4, '\0')
+     string = string.ljust(4, '\0')
 
-	if not is_big_endian:
-		string = string[::-1]
+     if not is_big_endian:
+          string = string[::-1]
 
-	return bytes(string, 'utf-8')
+     return bytes(string, 'utf-8')
 
 
 @_functools.total_ordering
