@@ -83,6 +83,9 @@ class Definitions:
 	def dumps(self):
 		"""Pickle and compress the definitions data"""
 		import pickletools
+		# avoid pathlib leaking into pickled types
+		# (not cross-platform safe)
+		self._xml_load_path = str(self._xml_load_path)
   
 		pickled_string = _pickle.dumps(self)
 		pickled_string = pickletools.optimize(pickled_string)
