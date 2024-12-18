@@ -10,9 +10,9 @@ import pathlib as _pathlib
 
 from Pytolith.Definitions import Definitions as _defintions
 from Pytolith.TagTypes import TagReference as _TagReference
-from Pytolith._TagLoader.Loader import TagLoader as _loader
+from Pytolith._TagBinary.Loader import TagLoader as _loader
 
-from Pytolith._TagLoader.Header import Header as _Header
+from Pytolith._TagBinary.Header import Header as _Header
 
 @_dataclass
 class TagReferenceDatabase():
@@ -89,7 +89,9 @@ def _get_default_definitions():
           __default_defs_cache = _load_default_definitions()
      return __default_defs_cache
 
-type TAG_FILE_TREE = dict[str, None|TAG_FILE_TREE]
+
+#type TAG_FILE_TREE = dict[str, None|TAG_FILE_TREE]
+TAG_FILE_TREE = dict[str, None]
 
 class TagSystem():
      def __init__(self, tag_folder: str|_pathlib.Path, tag_definitions: _defintions|None = None):

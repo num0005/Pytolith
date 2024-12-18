@@ -26,7 +26,7 @@ import code_generator
 
 class BuildDefinitionsPackage(Command, SubCommand):
      LAYOUTS_FILE = pathlib.Path("Pytolith")/"halo2.layouts"
-     FAST_TAG_LOADERS = pathlib.Path("Pytolith")/"_TagLoader"/"_FastTagLoaders.py"
+     FAST_TAG_LOADERS = pathlib.Path("Pytolith")/"_TagBinary"/"_FastTagLoaders.py"
      def initialize_options(self) -> None:
           self.build_base = None
           self.build_lib = None

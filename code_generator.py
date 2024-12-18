@@ -19,7 +19,7 @@ sys.path = [str(root_directory/"src")] + sys.path
 import Pytolith
 import Pytolith.Definitions as definitions
 from Pytolith.Definitions.Layout import _UNPACKAGE_TAG_RAW_SIZES, FIELD_TYPE, FieldSetDef, LayoutDef
-from Pytolith._TagLoader.Loader import _TagLoadingState
+from Pytolith._TagBinary.Loader import _TagLoadingState
 import io
 from Pytolith.TagTypes import TagField as _TagField
 
@@ -402,7 +402,7 @@ def build_accelerated_loads(defs: definitions.Definitions, version_info: str, st
      write_layout_table(stream, "LAYOUT_READERS_TAG_REF", loader_functions_tag_ref)
      stream.writeline(f"LAYOUT_VERSION = {repr(version_info)}")
      
-def generate_fast_loaders(defs: definitions.Definitions, output_file_name: str = "src/Pytolith/_TagLoader/_FastTagLoaders.py"):
+def generate_fast_loaders(defs: definitions.Definitions, output_file_name: str = "src/Pytolith/_TagBinary/_FastTagLoaders.py"):
      print(f"Writing fast loaders to {output_file_name}")
      with open(output_file_name, "w") as f:
           code = CodeWriter()
